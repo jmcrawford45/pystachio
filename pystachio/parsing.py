@@ -41,7 +41,16 @@ class MustacheParser(object):
     return outsplits
 
   @classmethod
-  def find(cls, splits, *namables, found_refs = dict()):
+  def join(cls, splits, *namables, found_refs = dict()):
+    """
+      Interpolate strings.
+
+      :params splits: The output of Parser.split(string)
+      :params namables: A sequence of Namable objects in which the interpolation should take place.
+
+      Returns 2-tuple containing:
+        joined string, list of unbound object ids (potentially empty)
+    """
     isplits = []
     unbound = []
     for ref in splits:
@@ -60,21 +69,6 @@ class MustacheParser(object):
           unbound.append(ref)
       else:
         isplits.append(ref)
-    return isplits, unbound
-
-
-  @classmethod
-  def join(cls, splits, *namables, found_refs = dict()):
-    """
-      Interpolate strings.
-
-      :params splits: The output of Parser.split(string)
-      :params namables: A sequence of Namable objects in which the interpolation should take place.
-
-      Returns 2-tuple containing:
-        joined string, list of unbound object ids (potentially empty)
-    """
-    isplits, unbound = cls.find(splits, *namables, found_refs=found_refs)
     return (''.join(map(str, isplits)), unbound)
 
   @classmethod

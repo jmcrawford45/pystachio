@@ -7,10 +7,11 @@ class SimpleObject(Object, Type):
   """
     A simply-valued (unnamable) object.
   """
-  __slots__ = ('_value',)
+  __slots__ = ('_value', '_str')
 
   def __init__(self, value):
     self._value = value
+    self._str = None
     super(SimpleObject, self).__init__()
 
   def get(self):
@@ -54,8 +55,10 @@ class SimpleObject(Object, Type):
     return unicode(si._value)
 
   def __str__(self):
-    si, _ = self.interpolate()
-    return str(si._value)
+    if self._str is None:
+      si, _ = self.interpolate()
+      self._str = str(si._value)
+    return self._str
 
   def __repr__(self):
     return '%s(%s)' % (self.__class__.__name__, str(self))
