@@ -110,6 +110,15 @@ def Default(cls, default):
   """
   return TypeSignature(cls, required=False, default=default)
 
+class IsNotMappingError(ValueError):
+  """Raised when a composite argument is not a Mapping"""
+
+  def __init__(self, arg):
+    self.arg = arg
+
+  def __repr__(self):
+    return 'IsNotMappingError({!r})'.format(self.arg)
+
 
 class StructFactory(TypeFactory):
   PROVIDES = 'Struct'
@@ -160,15 +169,6 @@ class StructMetaclass(type):
     else:
       return type.__new__(mcs, name, parents, attributes)
 
-class IsNotMappingError(ValueError):
-  """Raised when a composite argument is not a Mapping"""
-
-  def __init__(self, arg):
-    self.arg = arg
-
-  def __repr__(self):
-    return 'IsNotMappingError({!r})'.format(self.arg)
-
 StructMetaclassWrapper = StructMetaclass('StructMetaclassWrapper', (object,), {})
 class Structural(Object, Type, Namable):
   """A Structural base type for composite objects."""
@@ -216,6 +216,248 @@ class Structural(Object, Type, Namable):
 
   def __eq__(self, other):
     if not isinstance(other, Structural): return False
+    if self.TYPEMAP != other.TYPEMAP: return False
+    si = self.interpolate()
+    oi = other.interpolate()
+    return si[0]._schema_data == oi[0]._schema_data
+
+  def __repr__(self):
+    si, _ = self.interpolate()
+    return '%s(%s)' % (
+      self.__class__.__name__,
+      (',\n%s' % (' ' * (len(self.__class__.__name__) + 1))).join(
+          '%s=%s' % (key, val) for key, val in si._schema_data.items() if val is not Empty)
+    )
+
+  def __getattr__(self, attr):
+    if not hasattr(self, 'TYPEMAP'):
+      raise AttributeError
+
+    if attr.startswith('has_'):
+      if attr[4:] in self.TYPEMAP:
+        return lambda: self._schema_data[attr[4:]] != Empty
+
+    if attr not in self.TYPEMAP:
+      raise AttributeError("%s has no attribute %s" % (self.__class__.__name__, attr))
+
+    return lambda: self.interpolate_key(attr)
+
+  def check(self):
+    scopes = self.scopes()
+    for name, signature in self.TYPEMAP.items():
+      if self._schema_data[name] is Empty and signature.required:
+        return TypeCheck.failure('%s[%s] is required.' % (self.__class__.__name__, name))
+      elif self._schema_data[name] is not Empty:
+        type_check = self._schema_data[name].in_scope(*scopes).check()
+        if type_check.ok():
+          continue
+        else:
+          return TypeCheck.failure('%s[%s] failed: %s' % (self.__class__.__name__, name,
+            type_check.message()))
+    return TypeCheck.success()
+
+  def _self_scope(self):
+    return Environment(dict((key, value) for (key, value) in self._schema_data.items()
+                       if value is not Empty))
+
+  def interpolate(self):
+    unbound = set()
+    interpolated_schema_data = {}
+    scopes = self.scopes()
+    for key, value in self._schema_data.items():
+      if value is Empty:
+        interpolated_schema_data[key] = Empty
+      else:
+        vinterp, vunbound = value.in_scope(*scopes).interpolate()
+        unbound.update(vunbound)
+        interpolated_schema_data[key] = vinterp
+    return self.__class__(**interpolated_schema_data), list(unbound)
+
+  def interpolate_key(self, attribute):
+    if self._schema_data[attribute] is Empty:
+      return Empty
+    vinterp, _ = self._schema_data[attribute].in_scope(*self.scopes()).interpolate()
+    return self._process_schema_attribute(attribute, vinterp)
+
+  @classmethod
+  def type_factory(cls):
+    return 'Struct'
+
+  @classmethod
+  def type_parameters(cls):
+    return cls.TYPE_PARAMETERS
+
+  @classmethod
+  def _filter_against_schema(cls, values):
+    result = {}
+    for key, val in values.items():
+      if key not in cls.TYPEMAP:
+        continue
+      if issubclass(cls.TYPEMAP[key].klazz, Structural):
+        result[key] = cls.TYPEMAP[key].klazz._filter_against_schema(val)
+      else:
+        result[key] = val
+    return result
+
+  @classmethod
+  def json_load(cls, fp, strict=False):
+    return cls(json.load(fp) if strict else cls._filter_against_schema(json.load(fp)))
+
+  @classmethod
+  def json_loads(cls, json_string, strict=False):
+    return cls(json.loads(json_string) if strict
+               else cls._filter_against_schema(json.loads(json_string)))
+
+  def json_dump(self, fp):
+    d, _ = self.interpolate()
+    return json.dump(d.get(), fp)
+
+  def json_dumps(self):
+    d, _ = self.interpolate()
+    return json.dumps(d.get())
+
+  def find(self, ref, suppress_errors=False):
+    if not ref.is_dereference():
+      raise Namable.NamingError(self, ref)
+    name = ref.action().value
+    if name not in self.TYPEMAP or self._schema_data[name] is Empty:
+      self.raise_not_found(ref, suppress_errors)
+    else:
+      namable = self._schema_data[name]
+      if ref.rest().is_empty():
+        return namable.in_scope(*self.scopes())
+      else:
+        if not isinstance(namable, Namable):
+          raise Namable.Unnamable(namable)
+        else:
+          return namable.in_scope(*self.scopes()).find(ref.rest(), suppress_errors)
+
+
+class Struct(StructMetaclassWrapper, Structural):
+  """
+    Schema-based composite objects, e.g.
+
+      class Employee(Struct):
+        first = Required(String)
+        last  = Required(String)
+        email = Required(String)
+        phone = String
+
+      Employee(first = "brian", last = "wickman", email = "wickman@twitter.com").check()
+
+    They're purely functional data structures and behave more like functors.
+    In other words they're immutable:
+
+      >>> brian = Employee(first = "brian")
+      >>> brian(last = "wickman")
+      Employee(last=String(wickman), first=String(brian))
+      >>> brian
+      Employee(first=String(brian))
+  """
+  pass
+
+"""
+Everything below here is legacy struct code, maintained as TreeStruct* for backwards
+compat. It performs 30% worse, but it does provide a rarely used "super" scope. If
+you need this behavior and performance doesn't matter, you can use TreeStruct.
+"""
+
+class TreeStructFactory(TypeFactory):
+  PROVIDES = 'TreeStruct'
+
+  @staticmethod
+  def create(type_dict, *type_parameters, class_cell=None):
+    """
+      TreeStructFactory.create(*type_parameters) expects:
+
+        class name,
+        ((binding requirement1,),
+          (binding requirement2, bound_to_scope),
+           ...),
+        ((attribute_name1, attribute_sig1 (serialized)),
+         (attribute_name2, attribute_sig2 ...),
+         ...
+         (attribute_nameN, ...))
+        class_cell inherited from TreeStructMetaclass
+    """
+    name, parameters = type_parameters
+    for param in parameters:
+      assert isinstance(param, tuple)
+    typemap = dict((attr, TypeSignature.deserialize(param, type_dict))
+                   for attr, param in parameters)
+    attributes = {'TYPEMAP': typemap,  'TYPE_PARAMETERS': (str(name), tuple(sorted([(attr, sig.serialize()) for attr, sig in typemap.items()])))}
+    if class_cell:
+      attributes['__classcell__'] = class_cell
+    return TypeMetaclass(str(name), (TreeStructural,), attributes)
+
+
+class TreeStructMetaclass(type):
+  """
+    Schema-extracting metaclass for TreeStruct objects.
+  """
+  @staticmethod
+  def attributes_to_parameters(attributes):
+    parameters = []
+    for attr_name, attr_value in attributes.items():
+      sig = TypeSignature.wrap(attr_value)
+      if sig:
+        parameters.append((attr_name, sig.serialize()))
+    return tuple(parameters)
+
+  def __new__(mcs, name, parents, attributes):
+    if any(parent.__name__ == 'TreeStruct' for parent in parents):
+      type_parameters = TreeStructMetaclass.attributes_to_parameters(attributes)
+      return TypeFactory.new({}, 'TreeStruct', name, type_parameters, class_cell=attributes.pop('__classcell__', None))
+    else:
+      return type.__new__(mcs, name, parents, attributes)
+
+TreeStructMetaclassWrapper = TreeStructMetaclass('TreeStructMetaclassWrapper', (object,), {})
+class TreeStructural(Object, Type, Namable):
+  """A TreeStructural base type for composite objects."""
+  __slots__ = ('_schema_data',)
+
+  def __init__(self, *args, **kw):
+    self._schema_data = frozendict((attr, value.default) for (attr, value) in self.TYPEMAP.items())
+    for arg in args:
+      if not isinstance(arg, Mapping):
+        raise IsNotMappingError(arg)
+      self._update_schema_data(**arg)
+    self._update_schema_data(**copy.copy(kw))
+    self_scope = self._self_scope()
+    super().__init__()
+    self._scopes = (Environment({'self': self_scope}), self_scope,)
+
+  def get(self):
+    return frozendict((k, v.get()) for k, v in self._schema_data.items() if v is not Empty)
+
+  def _process_schema_attribute(self, attr, value):
+    if attr not in self.TYPEMAP:
+      raise AttributeError('Unknown schema attribute %s' % attr)
+    schema_type = self.TYPEMAP[attr]
+    if value is Empty:
+      return Empty
+    elif isinstance(value, schema_type.klazz):
+      return value
+    else:
+      return schema_type.klazz(value)
+
+  def _update_schema_data(self, **kw):
+    for attr, value in kw.items():
+      self._schema_data[attr] = self._process_schema_attribute(attr, value)
+
+  def dup(self):
+    return self.__class__(**self._schema_data)
+
+  def __call__(self, **kw):
+    new_self = self.copy()
+    new_self._update_schema_data(**copy.copy(kw))
+    return new_self
+
+  def __hash__(self):
+    return hash(self.get())
+
+  def __eq__(self, other):
+    if not isinstance(other, TreeStructural): return False
     if self.TYPEMAP != other.TYPEMAP: return False
     si = self.interpolate()
     oi = other.interpolate()
@@ -305,7 +547,7 @@ class Structural(Object, Type, Namable):
 
   @classmethod
   def type_factory(cls):
-    return 'Struct'
+    return 'TreeStruct'
 
   @classmethod
   def type_parameters(cls):
@@ -317,7 +559,7 @@ class Structural(Object, Type, Namable):
     for key, val in values.items():
       if key not in cls.TYPEMAP:
         continue
-      if issubclass(cls.TYPEMAP[key].klazz, Structural):
+      if issubclass(cls.TYPEMAP[key].klazz, TreeStructural):
         result[key] = cls.TYPEMAP[key].klazz._filter_against_schema(val)
       else:
         result[key] = val
@@ -357,11 +599,11 @@ class Structural(Object, Type, Namable):
           return namable.in_scope(*self.scopes()).find(ref.rest(), suppress_errors)
 
 
-class Struct(StructMetaclassWrapper, Structural):
+class TreeStruct(TreeStructMetaclassWrapper, TreeStructural):
   """
     Schema-based composite objects, e.g.
 
-      class Employee(Struct):
+      class Employee(TreeStruct):
         first = Required(String)
         last  = Required(String)
         email = Required(String)

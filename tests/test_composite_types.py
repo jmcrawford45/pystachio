@@ -211,14 +211,14 @@ def test_getattr_bad_cases():
 
 
 def test_self_super():
-  class Child(Struct):
+  class Child(TreeStruct):
     value = Integer
 
-  class Parent(Struct):
+  class Parent(TreeStruct):
     child = Child
     value = Integer
 
-  class Grandparent(Struct):
+  class Grandparent(TreeStruct):
     parent = Parent
     value = Integer
 
