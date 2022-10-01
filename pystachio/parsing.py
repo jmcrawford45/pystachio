@@ -58,7 +58,7 @@ class MustacheParser(object):
         if ref not in found_refs:
           for namable in namables:
             try:
-              found_refs[ref] = namable.find(ref)
+              found_refs[ref] = namable.find(ref, suppress_errors=True)
               break
             except Namable.Error:
               continue

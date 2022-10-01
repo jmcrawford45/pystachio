@@ -340,12 +340,12 @@ class Structural(Object, Type, Namable):
     d, _ = self.interpolate()
     return json.dumps(d.get())
 
-  def find(self, ref):
+  def find(self, ref, suppress_errors=False):
     if not ref.is_dereference():
       raise Namable.NamingError(self, ref)
     name = ref.action().value
     if name not in self.TYPEMAP or self._schema_data[name] is Empty:
-      raise Namable.NotFound(self, ref)
+      self.raise_not_found(ref, suppress_errors)
     else:
       namable = self._schema_data[name]
       if ref.rest().is_empty():
@@ -354,7 +354,7 @@ class Structural(Object, Type, Namable):
         if not isinstance(namable, Namable):
           raise Namable.Unnamable(namable)
         else:
-          return namable.in_scope(*self.scopes()).find(ref.rest())
+          return namable.in_scope(*self.scopes()).find(ref.rest(), suppress_errors)
 
 
 class Struct(StructMetaclassWrapper, Structural):

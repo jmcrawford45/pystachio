@@ -50,12 +50,12 @@ class Environment(Namable):
       else:
         raise ValueError("Environment expects dict or Environment, got %s" % repr(d))
 
-  def find(self, ref):
+  def find(self, ref, suppress_errors=False):
     if ref in self._table:
       return self._table[ref]
     targets = [key for key in self._table if Ref.subscope(key, ref)]
     if not targets:
-      raise Namable.NotFound(self, ref)
+      self.raise_not_found(ref, suppress_errors)
     else:
       for key in sorted(targets, reverse=True):
         scope = self._table[key]
@@ -65,11 +65,11 @@ class Environment(Namable):
         # If subscope is empty, then we should've found it in the ref table.
         assert not subscope.is_empty()
         try:
-          resolved = scope.find(subscope)
+          resolved = scope.find(subscope, suppress_errors=True)
           return resolved
         except Namable.Error:
           continue
-    raise Namable.NotFound(self, ref)
+    self.raise_not_found(ref, suppress_errors)
 
   def __repr__(self):
     return 'Environment(%s)' % pformat(self._table)

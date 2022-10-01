@@ -41,7 +41,7 @@ class Namable(object):
       super(Namable.NotFound, self).__init__('Could not find %s in object %s' % (ref.action().value,
         obj.__class__.__name__))
 
-  def find(self, ref):
+  def find(self, ref, suppress_errors=False):
     """
       Given a ref, return the value referencing that ref.
       Raises Namable.NotFound if not found.
@@ -49,6 +49,11 @@ class Namable(object):
       Raises Namable.Unnamable if try to dereference into an unnamable type.
     """
     raise NotImplementedError
+
+  def raise_not_found(self, ref, suppress_errors):
+    if suppress_errors:
+      raise self.Error()
+    raise self.NotFound(self, ref)
 
 
 class Ref(object):
@@ -102,6 +107,7 @@ class Ref(object):
   class UnnamableError(Exception): pass
 
   @staticmethod
+  @lru_cache(maxsize=10000)
   def wrap(value):
     if isinstance(value, Ref):
       return value
@@ -109,7 +115,7 @@ class Ref(object):
       return Ref.from_address(value)
 
   @staticmethod
-  @lru_cache(maxsize=128)
+  @lru_cache(maxsize=10000)
   def from_address(address):
     components = []
     if not address or not isinstance(address, str):
@@ -125,7 +131,7 @@ class Ref(object):
 
   def __init__(self, components):
     self._components = tuple(components)
-    self._hash = None
+    self._hash = hash(self._components)
 
   def components(self):
     return self._components
@@ -164,6 +170,7 @@ class Ref(object):
     return Ref.subscope(self, ref)
 
   @staticmethod
+  @lru_cache(maxsize=10000)
   def split_components(address):
     def map_to_namable(component):
       if (component.startswith('[') and component.endswith(']') and
@@ -214,6 +221,4 @@ class Ref(object):
     return Ref.compare(self, other) == 1
 
   def __hash__(self):
-    if not self._hash:
-      self._hash = hash(self.components())
     return self._hash

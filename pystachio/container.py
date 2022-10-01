@@ -103,7 +103,7 @@ class ListContainer(Object, Namable, Type):
       unbound.update(eunbound)
     return self.__class__(interpolated), list(unbound)
 
-  def find(self, ref):
+  def find(self, ref, suppress_errors=False):
     if not ref.is_index():
       raise Namable.NamingError(self, ref)
     try:
@@ -111,7 +111,7 @@ class ListContainer(Object, Namable, Type):
     except ValueError:
       raise Namable.NamingError(self, ref)
     if len(self._values) <= intvalue:
-      raise Namable.NotFound(self, ref)
+      self.raise_not_found(ref, suppress_errors)
     else:
       namable = self._values[intvalue]
       if ref.rest().is_empty():
@@ -120,7 +120,7 @@ class ListContainer(Object, Namable, Type):
         if not isinstance(namable, Namable):
           raise Namable.Unnamable(namable)
         else:
-          return namable.in_scope(*self.scopes()).find(ref.rest())
+          return namable.in_scope(*self.scopes()).find(ref.rest(), suppress_errors)
 
   @classmethod
   def type_factory(cls):
@@ -272,7 +272,7 @@ class MapContainer(Object, Namable, Type):
       interpolated.append((kinterp, vinterp))
     return self.__class__(*interpolated), list(unbound)
 
-  def find(self, ref):
+  def find(self, ref, suppress_errors=False):
     if not ref.is_index():
       raise Namable.NamingError(self, ref)
     kvalue = self.KEYTYPE(ref.action().value)
@@ -285,8 +285,8 @@ class MapContainer(Object, Namable, Type):
           if not isinstance(namable, Namable):
             raise Namable.Unnamable(namable)
           else:
-            return namable.in_scope(*scopes).find(ref.rest())
-    raise Namable.NotFound(self, ref)
+            return namable.in_scope(*scopes).find(ref.rest(), suppress_errors)
+    self.raise_not_found(ref, suppress_errors)
 
   @classmethod
   def type_factory(cls):
