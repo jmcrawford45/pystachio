@@ -181,7 +181,9 @@ class Structural(Object, Type, Namable):
         raise IsNotMappingError(arg)
       self._update_schema_data(**arg)
     self._update_schema_data(**copy.copy(kw))
-    super(Structural, self).__init__()
+    self_scope = self._self_scope()
+    super().__init__()
+    self._scopes = (Environment({'self': self_scope}), self_scope,)
 
   def get(self):
     return frozendict((k, v.get()) for k, v in self._schema_data.items() if v is not Empty)
@@ -254,6 +256,26 @@ class Structural(Object, Type, Namable):
             type_check.message()))
     return TypeCheck.success()
 
+  def bind(self, *args, **kw):
+    """
+      Bind environment variables into this object's scope.
+    """
+    new_self = self.copy()
+    new_scopes = Object.translate_to_scopes(*args, **kw)
+    new_scopes += self._cast_scopes_to_child(new_scopes)
+    new_self._scopes = tuple(reversed(new_scopes)) + new_self._scopes
+    return new_self
+
+  def in_scope(self, *args, **kw):
+    """
+      Scope this object to a parent environment (like bind but reversed.)
+    """
+    new_self = self.copy()
+    new_scopes = Object.translate_to_scopes(*args, **kw)
+    new_scopes += self._cast_scopes_to_child(new_scopes)
+    new_self._scopes = new_self._scopes + new_scopes
+    return new_self
+
   @classmethod
   def _cast_scopes_to_child(cls, scopes):
     return tuple(Environment({'super': scope}) for scope in scopes)
@@ -261,11 +283,6 @@ class Structural(Object, Type, Namable):
   def _self_scope(self):
     return Environment(dict((key, value) for (key, value) in self._schema_data.items()
                        if value is not Empty))
-
-  def scopes(self):
-    self_scope = self._self_scope()
-    return (Environment({'self': self_scope}), self_scope,) + self._scopes + (
-        self._cast_scopes_to_child(self._scopes))
 
   def interpolate(self):
     unbound = set()
